@@ -17,3 +17,7 @@ Thumbs.db
 
 # Docs folder
 docs/
+
+# Ignore FFmpeg binaries but keep the bin folder
+bin/*
+!bin/.gitkeep
