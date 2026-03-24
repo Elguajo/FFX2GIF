@@ -14,3 +14,6 @@ Thumbs.db
 # ZIP archives
 *.zip
 *.rar
+
+# Docs folder
+docs/
