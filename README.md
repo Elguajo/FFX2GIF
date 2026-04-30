@@ -34,23 +34,23 @@
 
 > [!NOTE]  
 > Скрипт использует внешний мощный конвертер **FFmpeg** для создания высококачественных GIF, так как встроенный рендер After Effects в GIF работает медленно и может выдавать артефакты. 
-> Для работы скрипта необходимо скачать исполняемый файл `ffmpeg` и поместить его в папку `bin` рядом со скриптом.
+> Скрипт автоматически ищет `ffmpeg` в папке `bin` рядом со скриптом, в системном `PATH`, а также в типичных путях Homebrew на macOS.
 
 **Как скачать и установить FFmpeg:**
 1. **Для Windows:** Скачайте `ffmpeg.exe` с [официального сайта](https://github.com/BtbN/FFmpeg-Builds/releases) (ищите сборку `ffmpeg-master-latest-win64-gpl.zip`, внутри архива в папке `bin` будет файл `ffmpeg.exe`).
 2. **Для Mac OS:** Скачайте `ffmpeg` с [evermeet.cx](https://evermeet.cx/ffmpeg/) (или установите через Homebrew: `brew install ffmpeg`).
-3. Создайте папку `bin` в той же директории, где находится скрипт `FFX_to_GIF_Generator.jsx`.
-4. Поместите скачанный файл (`ffmpeg.exe` или `ffmpeg`) в эту папку `bin`.
+3. Если FFmpeg уже установлен в системе, дополнительных действий не требуется.
+4. Если автопоиск не сработал, создайте папку `bin` рядом со скриптом и поместите туда `ffmpeg.exe` или `ffmpeg`, либо укажите файл вручную через кнопку **Обзор**.
 
 ### 🏃‍♂️ Использование
 
 1. Скачайте этот скрипт (`FFX_to_GIF_Generator.jsx`).
-2. Убедитесь, что вы скачали FFmpeg и положили его в папку `bin` (как описано выше).
+2. Убедитесь, что FFmpeg установлен в системе, лежит в папке `bin` рядом со скриптом или будет выбран вручную.
 3. Откройте After Effects.
 4. В верхнем меню выберите: `File` -> `Scripts` -> `Run Script File...` и укажите `FFX_to_GIF_Generator.jsx`.
 4. В появившемся окне интерфейса:
    - **Шаг 1:** Выберите папку, где лежат ваши пресеты `.ffx`.
-   - **Шаг 2:** Путь к FFmpeg определится автоматически (он появится как "✅ Найдено в папке /bin").
+   - **Шаг 2:** Путь к FFmpeg определится автоматически. Если этого не произошло, укажите исполняемый файл вручную.
    - **Шаг 3:** Настройте параметры GIF (FPS, ширину) и отметьте удаление видео-исходников по желанию.
    - Нажмите **🚀 СТАРТ: Сгенерировать GIF**.
 5. Наблюдайте за индикатором прогресса. По завершении появится уведомление "Готово!".
@@ -76,23 +76,23 @@ No more applying presets manually just to see what they look like! Point the scr
 
 > [!NOTE]  
 > This script uses the external command-line tool **FFmpeg** to create high-quality GIFs because the built-in AE GIF renderer is slow and prone to artifacts. 
-> To use the script, you must download the `ffmpeg` executable and place it in the `bin` folder next to the script.
+> The script automatically looks for `ffmpeg` in the local `bin` folder, the system `PATH`, and common Homebrew paths on macOS.
 
 **How to download and install FFmpeg:**
 1. **For Windows:** Download `ffmpeg.exe` from the [official builds](https://github.com/BtbN/FFmpeg-Builds/releases) (look for `ffmpeg-master-latest-win64-gpl.zip`, inside the archive in the `bin` folder you'll find `ffmpeg.exe`).
 2. **For Mac OS:** Download `ffmpeg` from [evermeet.cx](https://evermeet.cx/ffmpeg/) (or install via Homebrew: `brew install ffmpeg`).
-3. Create a folder named `bin` in the same directory as the `FFX_to_GIF_Generator.jsx` script.
-4. Place the downloaded executable (`ffmpeg.exe` or `ffmpeg`) into this `bin` folder.
+3. If FFmpeg is already installed system-wide, no extra action is required.
+4. If auto-detection fails, create a `bin` folder next to the script and place `ffmpeg.exe` or `ffmpeg` there, or select the executable manually with **Browse**.
 
 ### 🏃‍♂️ How to Use
 
 1. Download this script (`FFX_to_GIF_Generator.jsx`).
-2. Make sure you have downloaded FFmpeg and placed it in the `bin` folder (as described above).
+2. Make sure FFmpeg is installed system-wide, available in the local `bin` folder, or ready to be selected manually.
 3. Open After Effects.
 4. Go to the top menu: `File` -> `Scripts` -> `Run Script File...` and select `FFX_to_GIF_Generator.jsx`.
 4. In the UI window that appears:
    - **Step 1:** Select the folder containing your `.ffx` presets.
-   - **Step 2:** The FFmpeg path will be detected automatically (indicated by "✅ Найдено в папке /bin").
+   - **Step 2:** The FFmpeg path will be detected automatically. If not, select the executable manually.
    - **Step 3:** Adjust the GIF settings (FPS, width) and check the "Delete source videos" box if desired.
    - Click **🚀 START: Generate GIF**.
 5. Watch the progress bar. Once completed, a "Done!" notification will pop up.

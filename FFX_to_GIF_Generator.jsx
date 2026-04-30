@@ -97,15 +97,75 @@
                 this.layout.resize();
             };
 
-            // Автоматический поиск ffmpeg в папке bin
-            try {
+            function trimText(value) {
+                return value ? value.replace(/^\s+|\s+$/g, "") : "";
+            }
+
+            function quotePath(path) {
+                return '"' + path.replace(/"/g, '\\"') + '"';
+            }
+
+            function isValidFfmpeg(file) {
+                if (!file || !file.exists) return false;
+
+                try {
+                    var command = quotePath(file.fsName) + " -version";
+                    if ($.os.indexOf("Windows") !== -1) {
+                        command = 'cmd.exe /c "' + command + '"';
+                    }
+
+                    var output = system.callSystem(command);
+                    return output && output.toLowerCase().indexOf("ffmpeg version") !== -1;
+                } catch (e) {
+                    return false;
+                }
+            }
+
+            function addCandidate(candidates, path) {
+                path = trimText(path);
+                if (!path) return;
+
+                for (var i = 0; i < candidates.length; i++) {
+                    if (candidates[i] === path) return;
+                }
+
+                candidates.push(path);
+            }
+
+            function resolveFfmpeg() {
+                var isWin = $.os.indexOf("Windows") !== -1;
+                var executableName = isWin ? "ffmpeg.exe" : "ffmpeg";
                 var scriptFolder = new File($.fileName).parent;
-                var autoFfmpegName = $.os.indexOf("Windows") !== -1 ? "ffmpeg.exe" : "ffmpeg";
-                var autoFfmpegFile = new File(scriptFolder.fsName + "/bin/" + autoFfmpegName);
-                if (autoFfmpegFile.exists) {
+                var candidates = [];
+
+                addCandidate(candidates, scriptFolder.fsName + "/bin/" + executableName);
+
+                if (isWin) {
+                    addCandidate(candidates, system.callSystem('cmd.exe /c "where ffmpeg.exe 2>nul"').split(/\r?\n/)[0]);
+                } else {
+                    addCandidate(candidates, system.callSystem("/bin/sh -lc 'command -v ffmpeg'"));
+
+                    addCandidate(candidates, "/opt/homebrew/bin/ffmpeg");
+                    addCandidate(candidates, "/usr/local/bin/ffmpeg");
+                    addCandidate(candidates, "/usr/bin/ffmpeg");
+                }
+
+                for (var i = 0; i < candidates.length; i++) {
+                    var candidate = new File(candidates[i]);
+                    if (isValidFfmpeg(candidate)) return candidate;
+                }
+
+                return null;
+            }
+
+            // Автоматический поиск ffmpeg: локальный bin -> системный PATH -> типовые macOS пути
+            try {
+                var autoFfmpegFile = resolveFfmpeg();
+                if (autoFfmpegFile) {
                     fileFfmpeg = autoFfmpegFile;
-                    txtFfmpeg.text = "✅ Найдено в папке /bin";
-                    btnFfmpeg.enabled = false;
+                    txtFfmpeg.text = fileFfmpeg.fsName;
+                } else {
+                    txtFfmpeg.text = "Не найден автоматически...";
                 }
             } catch(e) {}
 
@@ -123,6 +183,11 @@
                 var isWin = $.os.indexOf("Windows") !== -1;
                 var f = File.openDialog("Найдите скачанный ffmpeg", isWin ? "*.exe" : "*.*");
                 if (f) {
+                    if (!isValidFfmpeg(f)) {
+                        alert("Выбранный файл не похож на рабочий FFmpeg. Укажите исполняемый файл ffmpeg.");
+                        return;
+                    }
+
                     fileFfmpeg = f;
                     txtFfmpeg.text = fileFfmpeg.fsName;
                     checkReady();
@@ -133,6 +198,8 @@
                 if (folderFFX !== null && fileFfmpeg !== null) {
                     btnGenerate.enabled = true;
                     statusText.text = "Готов к работе!";
+                } else {
+                    btnGenerate.enabled = false;
                 }
             }
 
