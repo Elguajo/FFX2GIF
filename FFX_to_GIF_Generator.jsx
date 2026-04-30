@@ -66,8 +66,12 @@
 
             buildGifCommand: function(ffmpegFile, videoFile, gifFile, fps, width) {
                 var filter = "fps=" + fps + ",scale=" + width + ":-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse";
-                var command = quotePath(ffmpegFile.fsName) + " -i " + quotePath(videoFile.fsName) + " -vf " + quotePath(filter) + " -y " + quotePath(gifFile.fsName);
+                var command = quotePath(ffmpegFile.fsName) + " -hide_banner -i " + quotePath(videoFile.fsName) + " -vf " + quotePath(filter) + " -y " + quotePath(gifFile.fsName);
                 return isWindows() ? 'cmd.exe /c "' + command + '"' : command;
+            },
+
+            hasUsableGif: function(file) {
+                return file && file.exists && file.length > 1024;
             },
 
             convertToGif: function(job, ffmpegFile, fps, width) {
@@ -75,8 +79,16 @@
                     return { ok: false, skipped: true, name: job.name };
                 }
 
+                if (job.gif.exists) {
+                    try {
+                        job.gif.remove();
+                    } catch (e) {
+                        return { ok: false, skipped: false, name: job.name, output: "Cannot remove existing GIF: " + e.toString() };
+                    }
+                }
+
                 var output = system.callSystem(this.buildGifCommand(ffmpegFile, job.video, job.gif, fps, width));
-                return { ok: job.gif.exists, skipped: false, name: job.name, output: output };
+                return { ok: this.hasUsableGif(job.gif), skipped: false, name: job.name, output: output };
             }
         };
 
@@ -147,7 +159,7 @@
 
                 var lastKeyTime = this.getLastKeyframeTime(textLayer);
                 if (lastKeyTime > 0) {
-                    var newDuration = Math.max(lastKeyTime, comp.frameDuration);
+                    var newDuration = Math.max(lastKeyTime + 0.5, comp.frameDuration);
                     comp.duration = newDuration;
                     bgLayer.locked = false;
                     bgLayer.outPoint = newDuration;
@@ -188,11 +200,35 @@
             }
         };
 
+        var Report = {
+            writeFailureLog: function(folder, failedJobs) {
+                if (!folder || failedJobs.length === 0) return null;
+
+                var logFile = new File(folder.fsName + "/ffx2gif_last_errors.log");
+                if (!logFile.open("w")) return null;
+
+                logFile.encoding = "UTF-8";
+                logFile.writeln("FFX to GIF conversion errors");
+                logFile.writeln("Generated: " + new Date().toString());
+                logFile.writeln("");
+
+                for (var i = 0; i < failedJobs.length; i++) {
+                    logFile.writeln("[" + (i + 1) + "] " + failedJobs[i].name);
+                    logFile.writeln(failedJobs[i].reason || "Unknown error");
+                    logFile.writeln("");
+                }
+
+                logFile.close();
+                return logFile;
+            }
+        };
+
         return {
             isWindows: isWindows,
             Ffmpeg: Ffmpeg,
             Presets: Presets,
-            Render: Render
+            Render: Render,
+            Report: Report
         };
     })();
 
@@ -393,6 +429,8 @@
         var filesToConvert = [];
         var tempComps = [];
         var tempRqItems = [];
+        var successCount = 0;
+        var failedJobs = [];
 
         app.beginUndoGroup("Generate GIFs - Setup");
 
@@ -438,8 +476,6 @@
             // Запускаем рендер ВСЕХ видео в After Effects
             app.project.renderQueue.render();
 
-            var successCount = 0;
-            
             if (win instanceof Window) {
                 statusText.text = "Подготовка к конвертации в GIF (Шаг 2 из 2)...";
                 progressBar.maxvalue = filesToConvert.length;
@@ -451,7 +487,14 @@
             for (var j = 0; j < filesToConvert.length; j++) {
                 var item = filesToConvert[j];
                 
-                if (!item.video.exists) continue;
+                if (!item.video.exists) {
+                    failedJobs.push({ name: item.name, reason: "Rendered video file was not created." });
+                    if (win instanceof Window) {
+                        progressBar.value = j + 1;
+                        win.update();
+                    }
+                    continue;
+                }
                 
                 if (win instanceof Window) {
                     statusText.text = "Конвертация " + (j + 1) + " из " + filesToConvert.length + ": " + item.name;
@@ -459,10 +502,17 @@
                 }
 
                 var result = FFX2GIF.Ffmpeg.convertToGif(item, fileFfmpeg, fps, width);
-                if (result.ok) successCount++;
+                if (result.ok) {
+                    successCount++;
+                } else {
+                    failedJobs.push({
+                        name: item.name,
+                        reason: result.output || "FFmpeg did not create a valid GIF file."
+                    });
+                }
 
-                // Удаляем временный видеофайл, если стоит галочка
-                if (deleteVideo && item.video.exists) {
+                // Удаляем временный видеофайл только после успешной конвертации
+                if (deleteVideo && result.ok && item.video.exists) {
                     item.video.remove();
                 }
 
@@ -499,7 +549,13 @@
             }
             
             if (successCount === 0) {
-                alert("⚠️ Рендер не удался! В очереди рендера (Render Queue) возникла ошибка. Проверьте настройки After Effects.");
+                var zeroLog = FFX2GIF.Report.writeFailureLog(folderFFX, failedJobs);
+                var zeroLogText = zeroLog ? "\nЛог ошибок: " + zeroLog.fsName : "";
+                alert("⚠️ Рендер или конвертация не удались. Проверьте настройки After Effects и FFmpeg." + zeroLogText);
+            } else if (failedJobs.length > 0) {
+                var partialLog = FFX2GIF.Report.writeFailureLog(folderFFX, failedJobs);
+                var partialLogText = partialLog ? "\nЛог ошибок: " + partialLog.fsName : "";
+                alert("⚠️ Готово частично.\nУспешно создано GIF: " + successCount + " из " + filesToConvert.length + partialLogText);
             } else {
                 alert("🔥 Готово! Обработка завершена.\nУспешно создано GIF: " + successCount + " из " + filesToConvert.length + "\nПроверьте вашу папку с пресетами!");
             }
