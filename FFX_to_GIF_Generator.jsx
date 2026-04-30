@@ -1,4 +1,201 @@
 (function(thisObj) {
+    var FFX2GIF = (function() {
+        function isWindows() {
+            return $.os.indexOf("Windows") !== -1;
+        }
+
+        function trimText(value) {
+            return value ? value.replace(/^\s+|\s+$/g, "") : "";
+        }
+
+        function quotePath(path) {
+            return '"' + path.replace(/"/g, '\\"') + '"';
+        }
+
+        function addCandidate(candidates, path) {
+            path = trimText(path);
+            if (!path) return;
+
+            for (var i = 0; i < candidates.length; i++) {
+                if (candidates[i] === path) return;
+            }
+
+            candidates.push(path);
+        }
+
+        var Ffmpeg = {
+            isValid: function(file) {
+                if (!file || !file.exists) return false;
+
+                try {
+                    var command = quotePath(file.fsName) + " -version";
+                    if (isWindows()) {
+                        command = 'cmd.exe /c "' + command + '"';
+                    }
+
+                    var output = system.callSystem(command);
+                    return output && output.toLowerCase().indexOf("ffmpeg version") !== -1;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            resolve: function(scriptFileName) {
+                var executableName = isWindows() ? "ffmpeg.exe" : "ffmpeg";
+                var scriptFolder = new File(scriptFileName).parent;
+                var candidates = [];
+
+                addCandidate(candidates, scriptFolder.fsName + "/bin/" + executableName);
+
+                if (isWindows()) {
+                    addCandidate(candidates, system.callSystem('cmd.exe /c "where ffmpeg.exe 2>nul"').split(/\r?\n/)[0]);
+                } else {
+                    addCandidate(candidates, system.callSystem("/bin/sh -lc 'command -v ffmpeg'"));
+                    addCandidate(candidates, "/opt/homebrew/bin/ffmpeg");
+                    addCandidate(candidates, "/usr/local/bin/ffmpeg");
+                    addCandidate(candidates, "/usr/bin/ffmpeg");
+                }
+
+                for (var i = 0; i < candidates.length; i++) {
+                    var candidate = new File(candidates[i]);
+                    if (this.isValid(candidate)) return candidate;
+                }
+
+                return null;
+            },
+
+            buildGifCommand: function(ffmpegFile, videoFile, gifFile, fps, width) {
+                var filter = "fps=" + fps + ",scale=" + width + ":-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse";
+                var command = quotePath(ffmpegFile.fsName) + " -i " + quotePath(videoFile.fsName) + " -vf " + quotePath(filter) + " -y " + quotePath(gifFile.fsName);
+                return isWindows() ? 'cmd.exe /c "' + command + '"' : command;
+            },
+
+            convertToGif: function(job, ffmpegFile, fps, width) {
+                if (!job.video.exists) {
+                    return { ok: false, skipped: true, name: job.name };
+                }
+
+                var output = system.callSystem(this.buildGifCommand(ffmpegFile, job.video, job.gif, fps, width));
+                return { ok: job.gif.exists, skipped: false, name: job.name, output: output };
+            }
+        };
+
+        var Presets = {
+            scan: function(folder) {
+                var results = [];
+                var folderFiles = folder.getFiles();
+                if (!folderFiles) return results;
+
+                for (var i = 0; i < folderFiles.length; i++) {
+                    var file = folderFiles[i];
+                    if (file instanceof Folder) {
+                        results = results.concat(this.scan(file));
+                    } else if (file instanceof File && file.name.toLowerCase().match(/\.ffx$/)) {
+                        results.push(file);
+                    }
+                }
+
+                return results;
+            }
+        };
+
+        var Render = {
+            disableExistingQueueItems: function() {
+                for (var q = 1; q <= app.project.renderQueue.numItems; q++) {
+                    try {
+                        app.project.renderQueue.item(q).render = false;
+                    } catch (e) {}
+                }
+            },
+
+            getLastKeyframeTime: function(propGroup) {
+                var maxTime = 0;
+                if (propGroup.numProperties === undefined) return maxTime;
+
+                for (var i = 1; i <= propGroup.numProperties; i++) {
+                    var prop = propGroup.property(i);
+                    if (prop.propertyType === PropertyType.PROPERTY) {
+                        if (prop.numKeys > 0) {
+                            var lastKeyTime = prop.keyTime(prop.numKeys);
+                            if (lastKeyTime > maxTime) maxTime = lastKeyTime;
+                        }
+                    } else if (prop.propertyType === PropertyType.INDEXED_GROUP || prop.propertyType === PropertyType.NAMED_GROUP) {
+                        var groupMaxTime = this.getLastKeyframeTime(prop);
+                        if (groupMaxTime > maxTime) maxTime = groupMaxTime;
+                    }
+                }
+
+                return maxTime;
+            },
+
+            createPreviewJob: function(ffxFile) {
+                var ffxName = decodeURI(ffxFile.name).replace(".ffx", "");
+                var compName = "GIF_Prev_" + ffxName.substring(0, 15);
+                var comp = app.project.items.addComp(compName, 800, 600, 1.0, 3.0, 30);
+                var bgLayer = comp.layers.addSolid([0.15, 0.15, 0.15], "BG", 800, 600, 1.0);
+                var textLayer = comp.layers.addText("ANIMATION");
+                var textProp = textLayer.property("Source Text");
+                var textDocument = textProp.value;
+
+                bgLayer.locked = true;
+                textDocument.fontSize = 100;
+                textDocument.fillColor = [1, 1, 1];
+                textDocument.justification = ParagraphJustification.CENTER_JUSTIFY;
+                textProp.setValue(textDocument);
+                textLayer.position.setValue([comp.width / 2, comp.height / 2]);
+                textLayer.applyPreset(ffxFile);
+
+                var lastKeyTime = this.getLastKeyframeTime(textLayer);
+                if (lastKeyTime > 0) {
+                    var newDuration = Math.max(lastKeyTime, comp.frameDuration);
+                    comp.duration = newDuration;
+                    bgLayer.locked = false;
+                    bgLayer.outPoint = newDuration;
+                    bgLayer.locked = true;
+                    textLayer.outPoint = newDuration;
+                }
+
+                var rqItem = app.project.renderQueue.items.add(comp);
+                var outMod = rqItem.outputModule(1);
+
+                try {
+                    outMod.applyTemplate("Lossless");
+                } catch (e) {
+                    try {
+                        outMod.applyTemplate("Без потерь");
+                    } catch (err) {}
+                }
+
+                var ext = "avi";
+                if (outMod.file) {
+                    var parts = outMod.file.name.split(".");
+                    if (parts.length > 1) ext = parts[parts.length - 1];
+                } else {
+                    ext = isWindows() ? "avi" : "mov";
+                }
+
+                var ffxDir = ffxFile.parent.fsName;
+                var videoPath = new File(ffxDir + "/" + ffxName + "_temp." + ext);
+                outMod.file = videoPath;
+
+                return {
+                    comp: comp,
+                    rqItem: rqItem,
+                    video: videoPath,
+                    gif: new File(ffxDir + "/" + ffxName + ".gif"),
+                    name: ffxName
+                };
+            }
+        };
+
+        return {
+            isWindows: isWindows,
+            Ffmpeg: Ffmpeg,
+            Presets: Presets,
+            Render: Render
+        };
+    })();
+
     function buildUI(thisObj) {
         var win = (thisObj instanceof Panel) ? thisObj : new Window("palette", "🎬 AE Preset Previewer - FFX to GIF Generator", undefined, {resizeable: true});
         if (win !== null) {
@@ -97,70 +294,9 @@
                 this.layout.resize();
             };
 
-            function trimText(value) {
-                return value ? value.replace(/^\s+|\s+$/g, "") : "";
-            }
-
-            function quotePath(path) {
-                return '"' + path.replace(/"/g, '\\"') + '"';
-            }
-
-            function isValidFfmpeg(file) {
-                if (!file || !file.exists) return false;
-
-                try {
-                    var command = quotePath(file.fsName) + " -version";
-                    if ($.os.indexOf("Windows") !== -1) {
-                        command = 'cmd.exe /c "' + command + '"';
-                    }
-
-                    var output = system.callSystem(command);
-                    return output && output.toLowerCase().indexOf("ffmpeg version") !== -1;
-                } catch (e) {
-                    return false;
-                }
-            }
-
-            function addCandidate(candidates, path) {
-                path = trimText(path);
-                if (!path) return;
-
-                for (var i = 0; i < candidates.length; i++) {
-                    if (candidates[i] === path) return;
-                }
-
-                candidates.push(path);
-            }
-
-            function resolveFfmpeg() {
-                var isWin = $.os.indexOf("Windows") !== -1;
-                var executableName = isWin ? "ffmpeg.exe" : "ffmpeg";
-                var scriptFolder = new File($.fileName).parent;
-                var candidates = [];
-
-                addCandidate(candidates, scriptFolder.fsName + "/bin/" + executableName);
-
-                if (isWin) {
-                    addCandidate(candidates, system.callSystem('cmd.exe /c "where ffmpeg.exe 2>nul"').split(/\r?\n/)[0]);
-                } else {
-                    addCandidate(candidates, system.callSystem("/bin/sh -lc 'command -v ffmpeg'"));
-
-                    addCandidate(candidates, "/opt/homebrew/bin/ffmpeg");
-                    addCandidate(candidates, "/usr/local/bin/ffmpeg");
-                    addCandidate(candidates, "/usr/bin/ffmpeg");
-                }
-
-                for (var i = 0; i < candidates.length; i++) {
-                    var candidate = new File(candidates[i]);
-                    if (isValidFfmpeg(candidate)) return candidate;
-                }
-
-                return null;
-            }
-
             // Автоматический поиск ffmpeg: локальный bin -> системный PATH -> типовые macOS пути
             try {
-                var autoFfmpegFile = resolveFfmpeg();
+                var autoFfmpegFile = FFX2GIF.Ffmpeg.resolve($.fileName);
                 if (autoFfmpegFile) {
                     fileFfmpeg = autoFfmpegFile;
                     txtFfmpeg.text = fileFfmpeg.fsName;
@@ -180,10 +316,10 @@
             };
 
             btnFfmpeg.onClick = function () {
-                var isWin = $.os.indexOf("Windows") !== -1;
+                var isWin = FFX2GIF.isWindows();
                 var f = File.openDialog("Найдите скачанный ffmpeg", isWin ? "*.exe" : "*.*");
                 if (f) {
-                    if (!isValidFfmpeg(f)) {
+                    if (!FFX2GIF.Ffmpeg.isValid(f)) {
                         alert("Выбранный файл не похож на рабочий FFmpeg. Укажите исполняемый файл ffmpeg.");
                         return;
                     }
@@ -203,26 +339,9 @@
                 }
             }
 
-            // Вспомогательная функция для рекурсивного поиска .ffx файлов
-            function getFFXFilesRecursive(folder) {
-                var results = [];
-                var folderFiles = folder.getFiles();
-                if (folderFiles) {
-                    for (var i = 0; i < folderFiles.length; i++) {
-                        var file = folderFiles[i];
-                        if (file instanceof Folder) {
-                            results = results.concat(getFFXFilesRecursive(file));
-                        } else if (file instanceof File && file.name.toLowerCase().match(/\.ffx$/)) {
-                            results.push(file);
-                        }
-                    }
-                }
-                return results;
-            }
-
             // Главный процесс
             btnGenerate.onClick = function () {
-                var files = getFFXFilesRecursive(folderFFX);
+                var files = FFX2GIF.Presets.scan(folderFFX);
                 if (files.length === 0) {
                     alert("В выбранной папке нет файлов .ffx!");
                     return;
@@ -284,112 +403,16 @@
             win.update();
         }
 
-        // Вспомогательная функция для поиска самого позднего ключа
-        function getLastKeyframeTime(propGroup) {
-            var maxTime = 0;
-            if (propGroup.numProperties !== undefined) {
-                for (var i = 1; i <= propGroup.numProperties; i++) {
-                    var prop = propGroup.property(i);
-                    if (prop.propertyType === PropertyType.PROPERTY) {
-                        if (prop.numKeys > 0) {
-                            var lastKeyTime = prop.keyTime(prop.numKeys);
-                            if (lastKeyTime > maxTime) maxTime = lastKeyTime;
-                        }
-                    } else if (prop.propertyType === PropertyType.INDEXED_GROUP || prop.propertyType === PropertyType.NAMED_GROUP) {
-                        var groupMaxTime = getLastKeyframeTime(prop);
-                        if (groupMaxTime > maxTime) maxTime = groupMaxTime;
-                    }
-                }
-            }
-            return maxTime;
-        }
-
         try {
-            // Отключаем все существующие элементы в очереди рендера
-            for (var q = 1; q <= app.project.renderQueue.numItems; q++) {
-                try {
-                    app.project.renderQueue.item(q).render = false;
-                } catch(e) {}
-            }
+            FFX2GIF.Render.disableExistingQueueItems();
 
             // Создаем отдельную композицию для каждого файла
             for (var i = 0; i < files.length; i++) {
                 var ffxFile = files[i];
-                var ffxName = decodeURI(ffxFile.name).replace(".ffx", "");
-
-                // Создаем сцену для рендера (800x600 пикселей, 3 секунды, 30 кадров)
-                var compName = "GIF_Prev_" + ffxName.substring(0, 15);
-                var comp = app.project.items.addComp(compName, 800, 600, 1.0, 3.0, 30);
-                tempComps.push(comp);
-
-                var bgLayer = comp.layers.addSolid([0.15, 0.15, 0.15], "BG", 800, 600, 1.0);
-                bgLayer.locked = true;
-
-                var textLayer = comp.layers.addText("ANIMATION");
-                
-                // Настраиваем размер, цвет и выравнивание текста
-                var textProp = textLayer.property("Source Text");
-                var textDocument = textProp.value;
-                textDocument.fontSize = 100;
-                textDocument.fillColor = [1, 1, 1];
-                textDocument.justification = ParagraphJustification.CENTER_JUSTIFY;
-                textProp.setValue(textDocument);
-                
-                // Выравниваем якорную точку и позицию
-                textLayer.position.setValue([comp.width / 2, comp.height / 2]);
-
-                // Применяем пресет
-                textLayer.applyPreset(ffxFile);
-
-                // Адаптивная длительность: находим самый поздний ключ после применения пресета
-                var lastKeyTime = getLastKeyframeTime(textLayer);
-                
-                if (lastKeyTime > 0) {
-                    var newDuration = lastKeyTime;
-                    if (newDuration < comp.frameDuration) {
-                        newDuration = comp.frameDuration;
-                    }
-                    comp.duration = newDuration;
-                    
-                    bgLayer.locked = false;
-                    bgLayer.outPoint = newDuration;
-                    bgLayer.locked = true;
-                    
-                    textLayer.outPoint = newDuration;
-                }
-
-                var rqItem = app.project.renderQueue.items.add(comp);
-                tempRqItems.push(rqItem);
-                var outMod = rqItem.outputModule(1);
-                
-                // Пытаемся применить шаблон без потерь
-                try {
-                    outMod.applyTemplate("Lossless"); // Английская версия
-                } catch(e) {
-                    try {
-                        outMod.applyTemplate("Без потерь"); // Русская версия
-                    } catch(err) {}
-                }
-                
-                var ext = "avi"; // по умолчанию
-                if (outMod.file) {
-                    var parts = outMod.file.name.split('.');
-                    if (parts.length > 1) {
-                        ext = parts[parts.length - 1];
-                    }
-                } else {
-                    ext = ($.os.indexOf("Windows") !== -1) ? "avi" : "mov";
-                }
-                
-                var ffxDir = ffxFile.parent.fsName;
-                var videoPath = new File(ffxDir + "/" + ffxName + "_temp." + ext);
-                outMod.file = videoPath;
-
-                filesToConvert.push({
-                    video: videoPath,
-                    gif: new File(ffxDir + "/" + ffxName + ".gif"),
-                    name: ffxName
-                });
+                var job = FFX2GIF.Render.createPreviewJob(ffxFile);
+                tempComps.push(job.comp);
+                tempRqItems.push(job.rqItem);
+                filesToConvert.push(job);
 
                 if (win instanceof Window) {
                     progressBar.value = i + 1;
@@ -435,12 +458,8 @@
                     win.update();
                 }
 
-                // Эта команда создает оптимизированную GIF с заданными настройками FPS и ширины
-                var ffmpegCmd = '"' + fileFfmpeg.fsName + '" -i "' + item.video.fsName + '" -vf "fps=' + fps + ',scale=' + width + ':-1:flags=lanczos,split[s0][s1];[s0]palettegen[p];[s1][p]paletteuse" -y "' + item.gif.fsName + '"';
-                var cmd = ($.os.indexOf("Windows") !== -1) ? 'cmd.exe /c "' + ffmpegCmd + '"' : ffmpegCmd;
-                
-                system.callSystem(cmd);
-                successCount++;
+                var result = FFX2GIF.Ffmpeg.convertToGif(item, fileFfmpeg, fps, width);
+                if (result.ok) successCount++;
 
                 // Удаляем временный видеофайл, если стоит галочка
                 if (deleteVideo && item.video.exists) {
